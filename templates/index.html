@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>网易云手机号登录</title>
+<style>
+body { font-family: Arial; background: #f0f2f5; padding: 50px; }
+.container { max-width: 400px; margin: auto; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 0 15px rgba(0,0,0,0.1);}
+input, button { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #ccc; }
+button { background: #007bff; color: white; border: none; cursor: pointer; }
+button:hover { background: #0056b3; }
+#result { white-space: pre-wrap; background: #f9f9f9; padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; }
+</style>
+</head>
+<body>
+<div class="container">
+<h2>手机号验证码登录</h2>
+<input type="text" id="phone" placeholder="请输入手机号">
+<button onclick="sendCaptcha()">发送验证码</button>
+<input type="text" id="captcha" placeholder="请输入验证码">
+<button onclick="login()">登录</button>
+<button onclick="checkStatus()">查询登录状态</button>
+<div id="result"></div>
+</div>
+
+<script>
+async function sendCaptcha() {
+    const phone = document.getElementById("phone").value;
+    const res = await fetch("/captcha", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: `phone=${phone}`
+    });
+    const data = await res.json();
+    document.getElementById("result").innerText = JSON.stringify(data, null, 2);
+}
+
+async function login() {
+    const phone = document.getElementById("phone").value;
+    const captcha = document.getElementById("captcha").value;
+    const res = await fetch("/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/x-www-form-urlencoded"},
+        body: `phone=${phone}&captcha=${captcha}`
+    });
+    const data = await res.json();
+    document.getElementById("result").innerText = JSON.stringify(data, null, 2);
+}
+
+async function checkStatus() {
+    const res = await fetch("/status");
+    const data = await res.json();
+    document.getElementById("result").innerText = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>
