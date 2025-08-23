@@ -2,3 +2,7 @@ flask
 requests
 NeteaseCloudMusic
 setuptools
+supabase==2.*
+httpx
+pyjwt
+cryptography
