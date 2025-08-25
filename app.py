@@ -1,123 +1,151 @@
+# app.py
 import os
-from flask import Flask, request, jsonify
+import threading
+import time
+import requests
+from flask import Flask, request, jsonify, render_template
+
+# NeteaseCloudMusic SDK
+from NeteaseCloudMusic import NeteaseCloudMusicApi
+
+# Supabase
 from supabase import create_client, Client
-from NeteaseCloudMusic import cloudmusic as cm
 
-# ============ 配置 =============
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# ---------- Config ----------
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+RENDER_URL = os.environ.get("RENDER_URL", "").strip()  # 可选，用于 keep-alive
 
-# 初始化 Supabase 客户端
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+app = Flask(__name__, template_folder="templates")
+netease = NeteaseCloudMusicApi()
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
-# Flask app
-app = Flask(__name__)
+# ---------- 可选：自唤醒，防止 Render 休眠 ----------
+def keep_alive():
+    url = RENDER_URL or ""
+    if not url:
+        return
+    while True:
+        try:
+            requests.get(url, timeout=10)
+        except Exception:
+            pass
+        time.sleep(300)  # 5 分钟
 
-# ============ 网易云登录 ============
-@app.route("/login", methods=["POST"])
-def login():
-    """
-    登录网易云账号
-    Body 参数:
-        phone: 手机号
-        password: 密码
-    """
-    data = request.json
-    phone = data.get("phone")
-    password = data.get("password")
+threading.Thread(target=keep_alive, daemon=True).start()
 
+# ------------------- 前端页面 -------------------
+@app.route("/")
+def index():
+    return render_template("login.html")
+
+# ------------------- Helper: safe extract functions -------------------
+def extract_list(resp):
+    if not resp:
+        return []
+    if isinstance(resp, list):
+        return resp
+    for key in ("data", "result", "list", "followeds", "artists", "songs", "weekData", "allData"):
+        v = resp.get(key) if isinstance(resp, dict) else None
+        if isinstance(v, list):
+            return v
+    return []
+
+def safe_get_profile_from_status(status_resp):
     try:
-        user = cm.login(phone, password)
-        return jsonify({"message": "登录成功", "userId": user["account"]["id"]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        if not status_resp:
+            return None
+        if isinstance(status_resp, dict):
+            for path in [("data","data","profile"), ("data","profile"), ("profile",)]:
+                cur = status_resp
+                ok = True
+                for p in path:
+                    if isinstance(cur, dict) and p in cur:
+                        cur = cur[p]
+                    else:
+                        ok = False
+                        break
+                if ok and isinstance(cur, dict):
+                    userId = cur.get("userId") or cur.get("user_id") or cur.get("id")
+                    return cur, userId
+        return None
+    except Exception:
+        return None
+
+def pick(v, *keys):
+    for k in keys:
+        if isinstance(v, dict) and k in v:
+            return v[k]
+    return None
+
+# ------------------- 网易云绑定与数据接口 -------------------
+
+@app.route("/api/netease/send_captcha", methods=["POST"])
+def ne_send_captcha():
+    phone = request.form.get("phone") or request.json.get("phone") if request.is_json else None
+    if not phone:
+        return jsonify({"error": "缺少手机号"}), 400
+    res = netease.request("/captcha/sent", {"phone": str(phone)})
+    return jsonify(res)
 
 
-# ============ 拉取关注歌手 ============
-@app.route("/fetch/artists", methods=["POST"])
-def fetch_artists():
-    """
-    拉取用户关注的歌手并写入 user_artists 表
-    Body 参数:
-        userId: 网易云用户 ID
-    """
-    data = request.json
-    user_id = data.get("userId")
+@app.route("/api/netease/login", methods=["POST"])
+def ne_login():
+    if request.is_json:
+        body = request.json
+        phone = body.get("phone")
+        captcha = body.get("captcha")
+    else:
+        phone = request.form.get("phone")
+        captcha = request.form.get("captcha")
 
+    if not phone or not captcha:
+        return jsonify({"error": "缺少手机号或验证码"}), 400
+
+    # 1) 网易云登录
     try:
-        artists = cm.getUserFollows(user_id)  # 获取关注歌手
-        for artist in artists:
-            supabase.table("user_artists").insert({
-                "user_id": user_id,
-                "artist_id": artist["userId"],
-                "artist_name": artist["nickname"]
-            }).execute()
-
-        return jsonify({"message": f"成功写入 {len(artists)} 个关注歌手"})
+        result = netease.request("/login/cellphone", {"phone": str(phone), "captcha": str(captcha)})
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": "调用网易云登录接口失败", "detail": str(e)}), 500
 
+    cookie = getattr(netease, "cookie", None)
+    if result.get("code") != 200 or not cookie:
+        return jsonify({"error": "网易云登录失败", "raw": result}), 400
 
-# ============ 拉取历史记录 ============
-@app.route("/fetch/history", methods=["POST"])
-def fetch_history():
-    """
-    拉取用户听歌历史并写入 user_history 表
-    Body 参数:
-        userId: 网易云用户 ID
-    """
-    data = request.json
-    user_id = data.get("userId")
-
+    # 2) 读取 profile
+    nickname = None
+    account_user_id = None
     try:
-        history = cm.getUserRecord(user_id, type=1)  # type=1 最近一周
-        for h in history:
-            supabase.table("user_history").insert({
-                "user_id": user_id,
-                "song_id": h["song"]["id"],
-                "song_name": h["song"]["name"],
-                "play_count": h["playCount"]
-            }).execute()
+        status = netease.request("/login/status")
+        profile_res = safe_get_profile_from_status(status)
+        if profile_res:
+            profile, account_user_id = profile_res[0], profile_res[1]
+            nickname = profile.get("nickname") or profile.get("name")
+        else:
+            nickname = pick(status, "data", "data", "profile", "nickname") or pick(status, "data", "profile", "nickname")
+            account_user_id = pick(status, "data", "data", "profile", "userId") or pick(status, "data", "profile", "userId")
+    except Exception:
+        pass
 
-        return jsonify({"message": f"成功写入 {len(history)} 条历史记录"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    return jsonify({
+        "ok": True,
+        "nickname": nickname
+    })
 
 
-# ============ 拉取喜欢的音乐 ============
-@app.route("/fetch/likes", methods=["POST"])
-def fetch_likes():
-    """
-    拉取用户喜欢的音乐并写入 user_likes 表
-    Body 参数:
-        userId: 网易云用户 ID
-    """
-    data = request.json
-    user_id = data.get("userId")
-
+@app.route("/api/netease/status", methods=["GET"])
+def ne_status():
     try:
-        likes = cm.getUserPlaylist(user_id)[0]  # 取第一个歌单（喜欢的音乐）
-        tracks = cm.getPlaylist(likes["id"])["tracks"]
-
-        for track in tracks:
-            supabase.table("user_likes").insert({
-                "user_id": user_id,
-                "song_id": track["id"],
-                "song_name": track["name"],
-                "artist_name": track["ar"][0]["name"]
-            }).execute()
-
-        return jsonify({"message": f"成功写入 {len(tracks)} 首喜欢的音乐"})
+        status = netease.request("/login/status")
+        return jsonify(status)
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": str(e)}), 500
 
-
-# ============ 首页 ============
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "Netease → Supabase API 运行中"})
-
+# 健康检查
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"ok": True})
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
