@@ -82,9 +82,16 @@ def pick(v, *keys):
 
 @app.route("/api/netease/send_captcha", methods=["POST"])
 def ne_send_captcha():
-    phone = request.form.get("phone") or request.json.get("phone") if request.is_json else None
+    phone = None
+    if request.is_json:
+        body = request.get_json(silent=True) or {}
+        phone = body.get("phone")
+    else:
+        phone = request.form.get("phone")
+
     if not phone:
         return jsonify({"error": "缺少手机号"}), 400
+
     res = netease.request("/captcha/sent", {"phone": str(phone)})
     return jsonify(res)
 
