@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>登录与绑定网易云</title>
+<title>绑定网易云账号</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   body{font-family:Arial,Helvetica,sans-serif;background:#f0f2f5;margin:0;padding:40px}
@@ -17,16 +17,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h2>1) 登录应用（Supabase 手机号 OTP）</h2>
-  <div class="card">
-    <input id="sp_phone" placeholder="手机号（含区号，如 +86... 或 1开头国内号也可尝试）" />
-    <button onclick="sendSpOtp()">发送 Supabase 验证码</button>
-    <input id="sp_code" placeholder="收到的验证码" />
-    <button onclick="verifySpOtp()">验证并登录</button>
-    <div id="sp_result"></div>
-  </div>
-
-  <h2>2) 绑定网易云账号（网易云短信验证码）</h2>
+  <h2>绑定网易云账号（网易云短信验证码）</h2>
   <div class="card">
     <input id="ne_phone" placeholder="网易云手机号（国内直接 1 开头）" />
     <button onclick="sendNeCaptcha()">发送网易云验证码</button>
@@ -37,50 +28,16 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-const SUPABASE_URL = "https://eiyaloehytwaralfqsrk.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVpeWFsb2VoeXR3YXJhbGZxc3JrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTUxMzk1MzYsImV4cCI6MjA3MDcxNTUzNn0.t6E4Ps8qRsukYJUFUJ7ZTuc3nmn0SeKlSFIUi2QcVKk";
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
 const $ = (id) => document.getElementById(id);
 
-async function sendSpOtp() {
-  const phone = $("sp_phone").value.trim();
-  if (!phone) return alert("请输入手机号");
-  const { data, error } = await supabase.auth.signInWithOtp({
-    phone,
-    options: { shouldCreateUser: true }
-  });
-  $("sp_result").innerText = error ? ("发送失败：" + error.message) : "验证码已发送";
-}
-
-async function verifySpOtp() {
-  const phone = $("sp_phone").value.trim();
-  const code = $("sp_code").value.trim();
-  if (!phone || !code) return alert("请输入手机号与验证码");
-  const { data, error } = await supabase.auth.verifyOtp({ phone, token: code, type: "sms" });
-  $("sp_result").innerText = error ? ("登录失败：" + error.message) : "登录成功";
-}
-
-async function getToken() {
-  const { data } = await supabase.auth.getSession();
-  return data?.session?.access_token || null;
-}
-
-// 下面这些调用你部署在 Render 的后端接口（同域，无需 CORS）
 async function sendNeCaptcha() {
-  const token = await getToken();
-  if (!token) return alert("请先完成上方 Supabase 登录");
   const phone = $("ne_phone").value.trim();
   if (!phone) return alert("请输入网易云手机号");
 
   const res = await fetch("/api/netease/send_captcha", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Authorization": "Bearer " + token
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `phone=${encodeURIComponent(phone)}`
   });
   const data = await res.json();
@@ -88,18 +45,13 @@ async function sendNeCaptcha() {
 }
 
 async function bindNetease() {
-  const token = await getToken();
-  if (!token) return alert("请先完成上方 Supabase 登录");
   const phone = $("ne_phone").value.trim();
   const code = $("ne_code").value.trim();
   if (!phone || !code) return alert("请输入网易云手机号与验证码");
 
   const res = await fetch("/api/netease/login", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Authorization": "Bearer " + token
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `phone=${encodeURIComponent(phone)}&captcha=${encodeURIComponent(code)}`
   });
   const data = await res.json();
@@ -107,11 +59,7 @@ async function bindNetease() {
 }
 
 async function checkNeStatus() {
-  const token = await getToken();
-  if (!token) return alert("请先完成上方 Supabase 登录");
-  const res = await fetch("/api/netease/status", {
-    headers: { "Authorization": "Bearer " + token }
-  });
+  const res = await fetch("/api/netease/status");
   const data = await res.json();
   $("ne_result").innerText = JSON.stringify(data, null, 2);
 }
